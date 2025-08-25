@@ -1,0 +1,332 @@
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const bodyParser = require('body-parser');
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
+
+// DB connection
+mongoose.connect('mongodb://localhost:27017/train_ticket_app', { useNewUrlParser: true, useUnifiedTopology: true });
+
+// Schemas
+const userSchema = new mongoose.Schema({
+  username: String,
+  password: String,
+});
+const trainSchema = new mongoose.Schema({
+  name: String,
+  source: String,
+  destination: String,
+  time: String,
+  seats: Number,
+  availableSeats: Number,
+});
+const bookingSchema = new mongoose.Schema({
+  user: String,
+  trainId: String,
+  passengerName: String,
+  age: Number,
+  seatNumber: Number,
+  paymentStatus: String,
+});
+const paymentSchema = new mongoose.Schema({
+  bookingId: String,
+  amount: Number,
+  status: String,
+  transactionId: String,
+});
+
+const User = mongoose.model('User', userSchema);
+const Train = mongoose.model('Train', trainSchema);
+const Booking = mongoose.model('Booking', bookingSchema);
+const Payment = mongoose.model('Payment', paymentSchema);
+
+// Seed trains if empty
+Train.countDocuments({}, async (err, count) => {
+  if (count === 0) {
+    await Train.insertMany([
+      { name: 'Express 1', source: 'CityA', destination: 'CityB', time: '09:00', seats: 100, availableSeats: 100 },
+      { name: 'Express 2', source: 'CityA', destination: 'CityC', time: '12:00', seats: 80, availableSeats: 80 },
+      { name: 'Express 3', source: 'CityB', destination: 'CityC', time: '15:00', seats: 60, availableSeats: 60 },
+    ]);
+  }
+});
+
+// Auth endpoints
+app.post('/register', async (req, res) => {
+  const { username, password } = req.body;
+  const hashed = await bcrypt.hash(password, 10);
+  const user = new User({ username, password: hashed });
+  await user.save();
+  res.json({ message: 'Registered successfully' });
+});
+app.post('/login', async (req, res) => {
+  const { username, password } = req.body;
+  const user = await User.findOne({ username });
+  if (!user) return res.status(400).json({ error: 'Invalid credentials' });
+  const match = await bcrypt.compare(password, user.password);
+  if (!match) return res.status(400).json({ error: 'Invalid credentials' });
+  res.json({ message: 'Login successful', username });
+});
+
+// Search trains
+app.get('/trains', async (req, res) => {
+  const { source, destination } = req.query;
+  const trains = await Train.find({ source, destination });
+  res.json(trains);
+});
+
+// Book ticket
+app.post('/book', async (req, res) => {
+  const { username, trainId, passengerName, age } = req.body;
+  const train = await Train.findById(trainId);
+  if (!train || train.availableSeats <= 0) return res.status(400).json({ error: 'No seats available' });
+  // Assign seat
+  const seatNumber = train.seats - train.availableSeats + 1;
+  train.availableSeats -= 1;
+  await train.save();
+  const booking = new Booking({
+    user: username,
+    trainId,
+    passengerName,
+    age,
+    seatNumber,
+    paymentStatus: 'pending'
+  });
+  await booking.save();
+  res.json({ bookingId: booking._id, seatNumber });
+});
+
+// Payment endpoint (dummy)
+app.post('/pay', async (req, res) => {
+  const { bookingId, amount } = req.body;
+  // Mark booking as paid
+  await Booking.findByIdAndUpdate(bookingId, { paymentStatus: 'paid' });
+  const payment = new Payment({
+    bookingId,
+    amount,
+    status: 'success',
+    transactionId: 'TXN' + Math.floor(Math.random()*1000000)
+  });
+  await payment.save();
+  res.json({ status: 'success', transactionId: payment.transactionId });
+});
+
+// Get booking details
+app.get('/booking/:id', async (req, res) => {
+  const booking = await Booking.findById(req.params.id);
+  if (!booking) return res.status(404).json({ error: 'Not found' });
+  const train = await Train.findById(booking.trainId);
+  res.json({ booking, train });
+});
+
+app.listen(5000, () => console.log('Server running on port 5000'));
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import './App.css';
+
+function App() {
+  const [username, setUsername] = useState('');
+  const [authMode, setAuthMode] = useState('login');
+  const [password, setPassword] = useState('');
+  const [loggedIn, setLoggedIn] = useState(false);
+
+  const [source, setSource] = useState('');
+  const [destination, setDestination] = useState('');
+  const [trains, setTrains] = useState([]);
+  const [selectedTrain, setSelectedTrain] = useState(null);
+
+  const [passengerName, setPassengerName] = useState('');
+  const [age, setAge] = useState('');
+  const [booking, setBooking] = useState(null);
+  const [paymentStatus, setPaymentStatus] = useState('');
+  const [amount, setAmount] = useState(500);
+
+  // Auth
+  const submitAuth = async () => {
+    try {
+      if (authMode === 'login') {
+        const res = await axios.post('http://localhost:5000/login', { username, password });
+        setLoggedIn(true);
+      } else {
+        await axios.post('http://localhost:5000/register', { username, password });
+        setAuthMode('login');
+      }
+    } catch (e) {
+      alert('Auth Error');
+    }
+  };
+
+  // Train search
+  const searchTrains = async () => {
+    const res = await axios.get('http://localhost:5000/trains', { params: { source, destination } });
+    setTrains(res.data);
+    setSelectedTrain(null);
+    setBooking(null);
+    setPaymentStatus('');
+  };
+
+  // Book
+  const bookTicket = async () => {
+    if (!selectedTrain || !passengerName || !age) return;
+    const res = await axios.post('http://localhost:5000/book', {
+      username,
+      trainId: selectedTrain._id,
+      passengerName,
+      age
+    });
+    setBooking({ bookingId: res.data.bookingId, seatNumber: res.data.seatNumber });
+    setPaymentStatus('');
+  };
+
+  // Payment
+  const pay = async () => {
+    const res = await axios.post('http://localhost:5000/pay', { bookingId: booking.bookingId, amount });
+    setPaymentStatus('Paid! Transaction: ' + res.data.transactionId);
+  };
+
+  // Booking details
+  const [bookingDetails, setBookingDetails] = useState(null);
+  useEffect(() => {
+    const fetchBooking = async () => {
+      if (booking && booking.bookingId) {
+        const res = await axios.get(`http://localhost:5000/booking/${booking.bookingId}`);
+        setBookingDetails(res.data);
+      }
+    };
+    fetchBooking();
+  }, [booking]);
+
+  return (
+    <div className="container">
+      <h1>Train Ticket Booking</h1>
+      {!loggedIn ? (
+        <div className="auth-form">
+          <h2>{authMode === 'login' ? 'Login' : 'Register'}</h2>
+          <input placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
+          <input placeholder="Password" type="password" value={password} onChange={e => setPassword(e.target.value)} />
+          <button onClick={submitAuth}>{authMode === 'login' ? 'Login' : 'Register'}</button>
+          <span onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>
+            {authMode === 'login' ? 'No account? Register.' : 'Have account? Login.'}
+          </span>
+        </div>
+      ) : (
+        <>
+          <div className="search-form">
+            <input placeholder="Source" value={source} onChange={e => setSource(e.target.value)} />
+            <input placeholder="Destination" value={destination} onChange={e => setDestination(e.target.value)} />
+            <button onClick={searchTrains}>Search Trains</button>
+          </div>
+          {trains.length > 0 && (
+            <ul className="train-list">
+              {trains.map(train => (
+                <li key={train._id} className={train.availableSeats === 0 ? 'full' : ''}>
+                  {train.name} ({train.time}) - Available Seats: {train.availableSeats}
+                  {train.availableSeats > 0 && (
+                    <button onClick={() => setSelectedTrain(train)}>Select</button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {selectedTrain && (
+            <div className="booking-form">
+              <h2>Booking for: {selectedTrain.name}</h2>
+              <input placeholder="Passenger Name" value={passengerName} onChange={e => setPassengerName(e.target.value)} />
+              <input placeholder="Age" type="number" value={age} onChange={e => setAge(e.target.value)} />
+              <button onClick={bookTicket}>Book Ticket</button>
+            </div>
+          )}
+          {booking && (
+            <div className="payment-form">
+              <h2>Seat Number: {booking.seatNumber}</h2>
+              <input placeholder="Amount" type="number" value={amount} onChange={e => setAmount(e.target.value)} />
+              <button onClick={pay}>Pay</button>
+              <div>{paymentStatus}</div>
+            </div>
+          )}
+          {bookingDetails && (
+            <div className="confirm">
+              <h2>Booking Confirmation</h2>
+              <p>Train: {bookingDetails.train.name}</p>
+              <p>Passenger: {bookingDetails.booking.passengerName}</p>
+              <p>Seat: {bookingDetails.booking.seatNumber}</p>
+              <p>Status: {bookingDetails.booking.paymentStatus}</p>
+              <p>Departure Time: {bookingDetails.train.time}</p>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+export default App;
+.container {
+  max-width: 600px;
+  margin: 30px auto;
+  font-family: Arial, sans-serif;
+  background: #f5f5f5;
+  padding: 20px;
+  border-radius: 10px;
+}
+
+h1 {
+  text-align: center;
+}
+
+.auth-form, .search-form, .booking-form, .payment-form, .confirm {
+  margin: 20px 0;
+  padding: 15px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px #eee;
+}
+
+input {
+  margin: 5px;
+  padding: 8px;
+  border-radius: 5px;
+  border: 1px solid #ccc;
+}
+
+button {
+  padding: 8px 15px;
+  margin: 5px;
+  background: #0077cc;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+button:hover {
+  background: #005fa3;
+}
+
+.train-list {
+  list-style: none;
+  padding: 0;
+}
+
+.train-list li {
+  margin: 8px 0;
+  padding: 8px;
+  background: #e0e0e0;
+  border-radius: 5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.train-list li.full {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+span {
+  cursor: pointer;
+  color: #0077cc;
+  display: block;
+  margin-top: 10px;
+}

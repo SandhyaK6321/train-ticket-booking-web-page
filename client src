@@ -1,0 +1,141 @@
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import './App.css';
+
+function App() {
+  const [username, setUsername] = useState('');
+  const [authMode, setAuthMode] = useState('login');
+  const [password, setPassword] = useState('');
+  const [loggedIn, setLoggedIn] = useState(false);
+
+  const [source, setSource] = useState('');
+  const [destination, setDestination] = useState('');
+  const [trains, setTrains] = useState([]);
+  const [selectedTrain, setSelectedTrain] = useState(null);
+
+  const [passengerName, setPassengerName] = useState('');
+  const [age, setAge] = useState('');
+  const [booking, setBooking] = useState(null);
+  const [paymentStatus, setPaymentStatus] = useState('');
+  const [amount, setAmount] = useState(500);
+
+  // Auth
+  const submitAuth = async () => {
+    try {
+      if (authMode === 'login') {
+        const res = await axios.post('http://localhost:5000/login', { username, password });
+        setLoggedIn(true);
+      } else {
+        await axios.post('http://localhost:5000/register', { username, password });
+        setAuthMode('login');
+      }
+    } catch (e) {
+      alert('Auth Error');
+    }
+  };
+
+  // Train search
+  const searchTrains = async () => {
+    const res = await axios.get('http://localhost:5000/trains', { params: { source, destination } });
+    setTrains(res.data);
+    setSelectedTrain(null);
+    setBooking(null);
+    setPaymentStatus('');
+  };
+
+  // Book
+  const bookTicket = async () => {
+    if (!selectedTrain || !passengerName || !age) return;
+    const res = await axios.post('http://localhost:5000/book', {
+      username,
+      trainId: selectedTrain._id,
+      passengerName,
+      age
+    });
+    setBooking({ bookingId: res.data.bookingId, seatNumber: res.data.seatNumber });
+    setPaymentStatus('');
+  };
+
+  // Payment
+  const pay = async () => {
+    const res = await axios.post('http://localhost:5000/pay', { bookingId: booking.bookingId, amount });
+    setPaymentStatus('Paid! Transaction: ' + res.data.transactionId);
+  };
+
+  // Booking details
+  const [bookingDetails, setBookingDetails] = useState(null);
+  useEffect(() => {
+    const fetchBooking = async () => {
+      if (booking && booking.bookingId) {
+        const res = await axios.get(`http://localhost:5000/booking/${booking.bookingId}`);
+        setBookingDetails(res.data);
+      }
+    };
+    fetchBooking();
+  }, [booking]);
+
+  return (
+    <div className="container">
+      <h1>Train Ticket Booking</h1>
+      {!loggedIn ? (
+        <div className="auth-form">
+          <h2>{authMode === 'login' ? 'Login' : 'Register'}</h2>
+          <input placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
+          <input placeholder="Password" type="password" value={password} onChange={e => setPassword(e.target.value)} />
+          <button onClick={submitAuth}>{authMode === 'login' ? 'Login' : 'Register'}</button>
+          <span onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>
+            {authMode === 'login' ? 'No account? Register.' : 'Have account? Login.'}
+          </span>
+        </div>
+      ) : (
+        <>
+          <div className="search-form">
+            <input placeholder="Source" value={source} onChange={e => setSource(e.target.value)} />
+            <input placeholder="Destination" value={destination} onChange={e => setDestination(e.target.value)} />
+            <button onClick={searchTrains}>Search Trains</button>
+          </div>
+          {trains.length > 0 && (
+            <ul className="train-list">
+              {trains.map(train => (
+                <li key={train._id} className={train.availableSeats === 0 ? 'full' : ''}>
+                  {train.name} ({train.time}) - Available Seats: {train.availableSeats}
+                  {train.availableSeats > 0 && (
+                    <button onClick={() => setSelectedTrain(train)}>Select</button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {selectedTrain && (
+            <div className="booking-form">
+              <h2>Booking for: {selectedTrain.name}</h2>
+              <input placeholder="Passenger Name" value={passengerName} onChange={e => setPassengerName(e.target.value)} />
+              <input placeholder="Age" type="number" value={age} onChange={e => setAge(e.target.value)} />
+              <button onClick={bookTicket}>Book Ticket</button>
+            </div>
+          )}
+          {booking && (
+            <div className="payment-form">
+              <h2>Seat Number: {booking.seatNumber}</h2>
+              <input placeholder="Amount" type="number" value={amount} onChange={e => setAmount(e.target.value)} />
+              <button onClick={pay}>Pay</button>
+              <div>{paymentStatus}</div>
+            </div>
+          )}
+          {bookingDetails && (
+            <div className="confirm">
+              <h2>Booking Confirmation</h2>
+              <p>Train: {bookingDetails.train.name}</p>
+              <p>Passenger: {bookingDetails.booking.passengerName}</p>
+              <p>Seat: {bookingDetails.booking.seatNumber}</p>
+              <p>Status: {bookingDetails.booking.paymentStatus}</p>
+              <p>Departure Time: {bookingDetails.train.time}</p>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+export default App;
